@@ -42,6 +42,7 @@
 
 (require 's)
 (require 'dash)
+(require 'cl-lib)
 
 (defvar groovy-mode-syntax-table
   (let ((table (make-syntax-table)))
@@ -686,6 +687,14 @@ dollar-slashy-quoted strings."
    '(",")
    str))
 
+(defun groovy--line-ends-with-slashy-string-p ()
+  "Return t if the current line ends with a slashy string."
+  (when (groovy--ends-with-token-p '("/") (groovy--current-line))
+    (save-excursion
+      (end-of-line)
+      (re-search-backward "\/")
+      (groovy--in-string-at-p (point)))))
+
 (defun groovy--current-line ()
   "The current line enclosing point."
   (buffer-substring-no-properties
@@ -743,7 +752,7 @@ Then this function returns (\"def\" \"if\" \"switch\")."
         ;; Count this paren, but only if it was on another line.
         (let ((new-line (line-number-at-pos (point))))
           (unless (= new-line current-line)
-            (setq paren-depth (1+ paren-depth))
+            (cl-incf paren-depth)
             (setq current-line new-line)))
 
         (setq syntax (syntax-ppss (point)))))
@@ -769,6 +778,13 @@ Then this function returns (\"def\" \"if\" \"switch\")."
 
     ;; Return the part of the line that isn't a comment (may be nil).
     code-text))
+
+(cl-defun groovy--backward-to-starting-paren (&optional (pos (point)))
+  (let ((syntax (syntax-ppss pos)))
+    ;; Are we inside parens?
+    (if (> (nth 0 syntax) 0)
+        ;; Go to the most recent enclosing open paren.
+        (goto-char (nth 1 syntax)))))
 
 (defun groovy--prev-code-line ()
   "Move point to the previous non-comment line, and return its contents."
@@ -819,7 +835,7 @@ Then this function returns (\"def\" \"if\" \"switch\")."
                       (nth 4 syntax-state-of-match)) ; comment
             (throw 'done t)))))))
 
-(defun groovy-indent-line ()
+(defun groovy-indent-line-orig ()
   "Indent the current line according to the number of parentheses."
   (interactive)
   (let* ((point-offset (- (current-column) (current-indentation)))
@@ -944,6 +960,155 @@ Then this function returns (\"def\" \"if\" \"switch\")."
                    (equal current-line "}"))
               (setq indent-level (1- indent-level)))))
 
+        (indent-line-to (* groovy-indent-offset indent-level)))))
+    ;; Point is now at the beginning of indentation, restore it
+    ;; to its original position (relative to indentation).
+    (when (>= point-offset 0)
+      (move-to-column (+ (current-indentation) point-offset)))))
+
+(defalias 'groovy-indent-line 'jl/groovy-indent-line)
+(defun jl/groovy-indent-line ()
+  "Indent the current line according to the number of parentheses."
+  (interactive)
+  (let* ((point-offset (- (current-column) (current-indentation)))
+         (syntax-bol (syntax-ppss (line-beginning-position)))
+         (multiline-string-p (nth 3 syntax-bol))
+         (multiline-comment-p (nth 4 syntax-bol))
+         (current-paren-depth (groovy--effective-paren-depth (line-beginning-position)))
+         (current-paren-pos (nth 1 syntax-bol))
+         (current-paren-character
+          (when (nth 1 syntax-bol) (char-after (nth 1 syntax-bol))))
+         (text-after-paren
+          (when current-paren-pos
+            (save-excursion
+              (goto-char current-paren-pos)
+              (s-trim
+               (groovy--remove-comments
+                (buffer-substring
+                 (1+ current-paren-pos)
+                 (line-end-position)))))))
+         (current-line (s-trim (groovy--current-line)))
+         has-closing-paren)
+    ;; If this line starts with a closing paren, unindent by one level.
+    ;;   if {
+    ;;   } <- this should not be indented.
+    (when (or (s-starts-with-p "}" current-line)
+              (s-starts-with-p ")" current-line)
+              (s-starts-with-p "]" current-line))
+      (setq has-closing-paren t)
+;;      (cl-decf current-paren-depth)
+      )
+
+    ;; `current-paren-depth' should never be negative, unless the code
+    ;; contains unbalanced parens. Ensure we handle that robustly.
+    (when (< current-paren-depth 0)
+      (setq current-paren-depth 0))
+
+    (cond
+     ;; Don't try to indent the line if we're in a multiline string.
+     (multiline-string-p 'noindent)
+     ;; Ensure we indent
+     ;; /*
+     ;;  * foo
+     ;;  */
+     ;;  correctly.
+     (multiline-comment-p
+      (indent-line-to (1+ (* groovy-indent-offset current-paren-depth))))
+
+     ;; Ensure we indent
+     ;; def x = [1,
+     ;;          2,
+     ;; ]
+     ;; correctly.
+     ((and (not (s-blank-str? text-after-paren))
+           (not has-closing-paren)
+           ;; ensure we don't indent closures
+           (not (string-match (rx "->" eol) text-after-paren)))
+      (let (open-paren-column)
+        (save-excursion
+          (goto-char current-paren-pos)
+          (setq open-paren-column (current-column)))
+        (indent-line-to (1+ open-paren-column))))
+
+     ;; Indent according to the number of parens.
+     (t
+      (let ((indent-level current-paren-depth))
+        ;; If the previous line ended with an arithmetic operator like
+        ;; `foo +`, then this line should be indented one more level.
+        (save-excursion
+          (let ((paren-depth current-paren-depth)
+                (escape-inner-paren has-closing-paren))
+            (while (>= paren-depth 0)
+              (let (prev-line
+                    (starting-pos (point))
+                    continuation-line-pos)
+                (while (and
+                        (setq prev-line (groovy--prev-code-line))
+                        (or (groovy--ends-with-infix-p prev-line)
+                            (and (groovy--ends-with-comma-p prev-line)
+                                 (not (memq current-paren-character (list ?\[ ?\()))
+;;                                 (not has-closing-paren)
+                                 ))
+                        (not (groovy--line-ends-with-slashy-string-p))
+                        (not (s-matches-p groovy--case-regexp prev-line)))
+                  (setq continuation-line-pos (point)))
+                (if continuation-line-pos
+                    (progn (goto-char continuation-line-pos)
+                           (cl-incf indent-level))
+                  (goto-char starting-pos))
+                
+                ;; If the previous lines are block statements (e.g., if, for, while,
+                ;;  else) without the optional curly brace, then indent for each block.
+                
+                ;; Loop backwards using groovy--prev-code-line until we hit
+                ;; a line that does not contain a block statement.
+                (setq starting-pos (point)
+                      continuation-line-pos nil)
+                (while (and
+                        (setq prev-line (groovy--prev-code-line))
+                        (groovy--line-contains-block-statements-p)
+                        (not (s-ends-with-p "{" (s-trim prev-line))))
+                  (setq continuation-line-pos (point))
+                  (cl-incf indent-level))
+                (goto-char (or continuation-line-pos starting-pos)))
+              ;; Move backwards to outer sexp, unless we are already at the top level
+              (if (= paren-depth 0)
+                  (setq paren-depth -1)
+                (when escape-inner-paren
+                  (groovy--backward-to-starting-paren)
+                  (cl-decf indent-level)
+                  (setq escape-inner-paren nil)) ;; Escape the innermost paren
+                (groovy--backward-to-starting-paren)
+                (setq paren-depth (groovy--effective-paren-depth (line-beginning-position))))
+                )))
+
+        ;; If this line is .methodCall() then we should indent one
+        ;; more level.
+        (when (s-starts-with-p "." current-line)
+          (cl-incf indent-level))
+
+        ;; If we're inside a switch statement, we should indent
+        ;; another level after case labels, e.g.
+        ;; case foo:
+        ;;     bar // <- extra indent
+        (let ((blocks (groovy--enclosing-blocks))
+              (switch-count 0))
+          (dolist (block-symbol blocks)
+            (when (equal block-symbol "switch")
+              (cl-incf switch-count)))
+          (when (> switch-count 0)
+            (cl-incf indent-level switch-count)
+            ;; The `case foo:' line should be indented less than the body.
+            (when (s-matches-p groovy--case-regexp current-line)
+              (cl-decf indent-level))
+            ;; The extra indent does not apply to the } closing the
+            ;; switch block.
+            (when (and
+                   (equal (car (last blocks)) "switch")
+                   (equal current-line "}"))
+              (cl-decf indent-level))))
+
+        (if has-closing-paren (cl-decf indent-level))
         (indent-line-to (* groovy-indent-offset indent-level)))))
     ;; Point is now at the beginning of indentation, restore it
     ;; to its original position (relative to indentation).

@@ -290,6 +290,21 @@ def x = [
     'another element'
 ]"))
 
+(ert-deftest groovy-indent-nested-list ()
+  "Ensure we handle indents inside lists correctly."
+  (skip-unless nil)
+  ;; Inner lists in an argument list without brackets
+  (should-preserve-indent "
+func a,
+    b: [
+        [
+            'indentMe',
+        ],
+        x,
+    ],
+    c
+"))
+
 (defmacro with-highlighted-groovy (src &rest body)
   "Insert SRC in a temporary groovy-mode buffer, apply syntax highlighting,
 then run BODY."
@@ -570,3 +585,11 @@ bar"
    (equal
     (groovy--remove-comments "foo /* bar */ baz")
     "foo  baz")))
+
+(ert-deftest groovy--line-ends-with-slashy-string-p ()
+  (with-highlighted-groovy "x = /foo/"
+    (should (groovy--line-ends-with-slashy-string-p)))
+  (with-highlighted-groovy "x = /foo/   "
+    (should (groovy--line-ends-with-slashy-string-p)))
+  (with-highlighted-groovy "x = foo/"
+    (should-not (groovy--line-ends-with-slashy-string-p))))
