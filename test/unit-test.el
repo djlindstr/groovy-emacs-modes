@@ -109,45 +109,63 @@ if (true) {
 }"))
 
 (ert-deftest groovy-indent-infix-operator ()
-  "We should increase indent after infix operators."
+  "Increase indent after infix operators."
   (should-preserve-indent
    "
 def a = b +
-    1")
+    1"))
+
+(ert-deftest groovy-indent-infix-operator-no-ws ()
   (should-preserve-indent
    "
 def a = b+
-    1")
+    1"))
+
+(ert-deftest groovy-indent-infix-operator-after-string ()
   (should-preserve-indent
    "
 def a = 'foo'+
-    'bar'")
+    'bar'"))
+
+(ert-deftest groovy-indent-infix-operator-or ()
   (should-preserve-indent
    "
 def a = b ||
-    1")
+    1"))
+
+(ert-deftest groovy-indent-infix-operator-commented-line ()
   ;; Don't get confused by commented-out lines.
   (should-preserve-indent
    "
 // def a = b+
-1")
+1"))
+
+(ert-deftest groovy-indent-ending-slashy ()
   ;; Don't get confused by lines that end by / when it isn't division.
   (should-preserve-indent
    "
 def x = /foo/
-1")
+1"))
+
+(ert-deftest groovy-indent-infix-after-function-call ()
   (should-preserve-indent
    "
 def a = b()+
-    1")
+    1"))
+
+(ert-deftest groovy-indent-infix-after-subscript-operator ()
   (should-preserve-indent
    "
 def a = b[3]+
-    1")
+    1"))
+
+(ert-deftest groovy-indent-infix-after-decrement-operator ()
   (should-preserve-indent
    "
 def a = b--+
-    1")
+    1"))
+
+(ert-deftest groovy-indent-infix-after-increment-operator ()
   (should-preserve-indent
    "
 def a = b+++
