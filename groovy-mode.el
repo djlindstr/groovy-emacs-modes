@@ -771,7 +771,8 @@ Then this function returns (\"def\" \"if\" \"switch\")."
     code-text))
 
 (defun groovy--prev-code-line ()
-  "Move point to the previous non-comment line, and return its contents."
+  "Move point to the previous non-comment line, and return its
+contents. Comments are removed and whitespace is trimmed."
   (catch 'done
     (let (code-text)
       (while t
@@ -782,7 +783,7 @@ Then this function returns (\"def\" \"if\" \"switch\")."
 
         ;; Get the part of the line that isn't in a comment.
         ;; If this isn't just white space, return it as a code line.
-        (setq code-text (groovy--extract-line-without-comments))
+        (setq code-text (s-trim (groovy--remove-comments (groovy--current-line))))
         (unless (s-blank-str-p code-text)
           (throw 'done code-text))))))
 
@@ -888,7 +889,6 @@ Then this function returns (\"def\" \"if\" \"switch\")."
         ;; `foo +`, then this line should be indented one more level.
         (save-excursion
           (let* ((prev-line (groovy--prev-code-line))
-                 (line-end (line-end-position))
                  ;; Check if the last thing is a slashy-string end, so we
                  ;; distinguish a string `/foo bar/` from arithmetic `x /`.
                  (end-slashy-string (and

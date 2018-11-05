@@ -147,6 +147,19 @@ def a = b ||
 def x = /foo/
 1"))
 
+(ert-deftest groovy-indent-ending-slashy-trailing-ws ()
+  (should-preserve-indent
+   "
+def x = /foo/\t
+1"))
+
+(ert-deftest groovy-indent-ending-slashy-inline-comment ()
+  ;; Don't get confused by inline comments.
+  (should-preserve-indent
+   "
+def x = /* comment */ /foo/
+1"))
+
 (ert-deftest groovy-indent-infix-after-function-call ()
   (should-preserve-indent
    "
